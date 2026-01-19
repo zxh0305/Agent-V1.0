@@ -42,6 +42,9 @@ class ToolType(Enum):
     CODE_TOOL = "code_tool"       # 代码运行工具
     PAPER_TOOL = "paper_tool"     # 文献查询工具
     SCHEDULE_TOOL = "schedule_tool"  # 日程管理工具
+    TRANSLATE_TOOL = "translate_tool"  # 翻译工具
+    SUMMARY_TOOL = "summary_tool"    # 文本摘要工具
+    QA_TOOL = "qa_tool"           # 知识问答工具
 
 
 @dataclass
@@ -129,6 +132,21 @@ class KeywordMatcher:
             "primary": ["日程", "提醒", "安排", "日历", "待办", "计划", "会议"],
             "secondary": ["时间", "预约", "任务列表", "添加日程", "查询日程", "删除日程"],
             "weight": 0.7
+        },
+        ToolType.TRANSLATE_TOOL: {
+            "primary": ["翻译", "翻成", "译成", "translate", "英译中", "中译英", "转译"],
+            "secondary": ["英文", "中文", "日文", "韩文", "多语言", "语言转换"],
+            "weight": 0.95
+        },
+        ToolType.SUMMARY_TOOL: {
+            "primary": ["摘要", "总结", "概括", "提炼", "简述", "归纳", "summary"],
+            "secondary": ["关键词", "提取要点", "缩写", "精简", "核心内容"],
+            "weight": 0.85
+        },
+        ToolType.QA_TOOL: {
+            "primary": ["问答", "问题", "什么是", "如何", "怎么", "为什么", "知识"],
+            "secondary": ["解释", "说明", "介绍", "了解", "查询知识", "百科"],
+            "weight": 0.75
         }
     }
 
@@ -141,7 +159,10 @@ class KeywordMatcher:
         "search": ["搜索", "查找", "查询", "检索"],
         "add": ["添加", "新增", "创建", "设置"],
         "delete": ["删除", "移除", "取消"],
-        "run": ["运行", "执行", "启动"]
+        "run": ["运行", "执行", "启动"],
+        "translate": ["翻译", "翻成", "译成", "转译"],
+        "summarize": ["摘要", "总结", "概括", "归纳", "提炼"],
+        "ask": ["问", "问答", "询问", "解答"]
     }
 
     def __init__(self):
@@ -246,6 +267,9 @@ class TaskParser:
         "visualize_data": r'(?:画|绘制|生成)(.+?)(?:图|表)',
         "search_content": r'(?:搜索|查找|检索)(.+)',
         "schedule_action": r'(?:添加|查询|删除)(.+?)(?:日程|提醒|安排)',
+        "translate_text": r'(?:翻译|把|将)(.+?)(?:翻译|译)(?:成|为)?(.+)?',
+        "summarize_text": r'(?:总结|摘要|概括|归纳)(.+)',
+        "ask_question": r'(?:什么是|如何|怎么|为什么|解释|介绍)(.+)',
     }
 
     def __init__(self):
@@ -434,6 +458,47 @@ class TaskParser:
                 "confidence": 0.8
             })
 
+        elif template_name == "translate_text":
+            # 翻译模式
+            source_text = groups[0] if groups else ""
+            target_lang = groups[1] if len(groups) > 1 and groups[1] else "中文"
+            sub_steps.append({
+                "order": 1,
+                "description": original_text,
+                "tool_type": ToolType.TRANSLATE_TOOL,
+                "action": "translate",
+                "params": {
+                    "text": source_text,
+                    "target_lang": "zh" if "中" in target_lang else "en"
+                },
+                "confidence": 0.9
+            })
+
+        elif template_name == "summarize_text":
+            # 摘要模式
+            sub_steps.append({
+                "order": 1,
+                "description": original_text,
+                "tool_type": ToolType.SUMMARY_TOOL,
+                "action": "summarize",
+                "params": {
+                    "text": groups[0] if groups else original_text,
+                    "max_length": 200
+                },
+                "confidence": 0.85
+            })
+
+        elif template_name == "ask_question":
+            # 问答模式
+            sub_steps.append({
+                "order": 1,
+                "description": original_text,
+                "tool_type": ToolType.QA_TOOL,
+                "action": "ask",
+                "params": {"question": original_text},
+                "confidence": 0.8
+            })
+
         return sub_steps if sub_steps else None
 
     def _split_by_separators(self, text: str) -> List[str]:
@@ -536,6 +601,89 @@ class TaskParser:
         return params
 
 
+class ConversationHistory:
+    """
+    会话历史管理类
+
+    用于存储和管理用户与Agent之间的对话历史
+
+    Attributes:
+        messages: 消息列表
+        max_history: 最大历史记录数
+    """
+
+    def __init__(self, max_history: int = 50):
+        """
+        初始化会话历史
+
+        Args:
+            max_history: 最大保存的历史消息数
+        """
+        self.messages: List[Dict[str, Any]] = []
+        self.max_history = max_history
+
+    def add_message(self, role: str, content: str, metadata: Dict[str, Any] = None) -> None:
+        """
+        添加消息到历史记录
+
+        Args:
+            role: 角色（user/assistant/system）
+            content: 消息内容
+            metadata: 额外的元数据
+        """
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": metadata or {}
+        }
+        self.messages.append(message)
+
+        # 保持历史记录在限制范围内
+        if len(self.messages) > self.max_history:
+            self.messages = self.messages[-self.max_history:]
+
+    def get_recent_messages(self, count: int = 10) -> List[Dict[str, Any]]:
+        """
+        获取最近的消息
+
+        Args:
+            count: 获取的消息数量
+
+        Returns:
+            消息列表
+        """
+        return self.messages[-count:]
+
+    def get_context(self, count: int = 5) -> str:
+        """
+        获取上下文字符串
+
+        Args:
+            count: 上下文消息数量
+
+        Returns:
+            格式化的上下文字符串
+        """
+        recent = self.get_recent_messages(count)
+        context_parts = []
+        for msg in recent:
+            role_name = "用户" if msg["role"] == "user" else "助手"
+            context_parts.append(f"{role_name}: {msg['content']}")
+        return "\n".join(context_parts)
+
+    def clear(self) -> None:
+        """清空历史记录"""
+        self.messages = []
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "messages": self.messages,
+            "total_count": len(self.messages)
+        }
+
+
 class TaskAgent:
     """
     智能任务处理 Agent 核心类
@@ -548,26 +696,33 @@ class TaskAgent:
     3. 生成执行计划
     4. 调用 ToolManager 执行工具
     5. 整合并返回执行结果
+    6. 支持会话历史管理
+    7. 支持任务失败重试
 
     Attributes:
         parser: 任务解析器实例
         tool_manager: 工具管理器实例（需外部注入）
         current_plan: 当前执行计划
         execution_history: 执行历史记录
+        conversation: 会话历史管理器
+        max_retries: 最大重试次数
     """
 
-    def __init__(self, tool_manager=None):
+    def __init__(self, tool_manager=None, max_retries: int = 3):
         """
         初始化 TaskAgent
 
         Args:
             tool_manager: 工具管理器实例，可选
+            max_retries: 任务失败最大重试次数
         """
         self.parser = TaskParser()
         self.tool_manager = tool_manager
         self.current_plan: Optional[TaskPlan] = None
         self.execution_history: List[TaskPlan] = []
         self._plan_counter = 0
+        self.conversation = ConversationHistory()
+        self.max_retries = max_retries
         logger.info("TaskAgent 初始化完成")
 
     def set_tool_manager(self, tool_manager) -> None:
@@ -585,10 +740,12 @@ class TaskAgent:
         处理用户任务的主入口方法
 
         完整的任务处理流程：
-        1. 解析任务
-        2. 创建执行计划
-        3. 执行计划
-        4. 整合结果
+        1. 记录用户输入到会话历史
+        2. 解析任务
+        3. 创建执行计划
+        4. 执行计划（支持重试）
+        5. 整合结果
+        6. 记录结果到会话历史
 
         Args:
             task_text: 用户输入的自然语言任务
@@ -599,14 +756,19 @@ class TaskAgent:
         """
         logger.info(f"开始处理任务: {task_text}")
 
+        # 记录用户输入
+        self.conversation.add_message("user", task_text)
+
         try:
             # 步骤1：解析任务
             sub_steps = self.parser.parse_task(task_text)
 
             if not sub_steps:
+                error_msg = "无法解析任务，请重新描述您的需求"
+                self.conversation.add_message("assistant", error_msg, {"type": "error"})
                 return {
                     "success": False,
-                    "error": "无法解析任务，请重新描述您的需求",
+                    "error": error_msg,
                     "plan": None
                 }
 
@@ -614,14 +776,21 @@ class TaskAgent:
             plan = self._create_execution_plan(task_text, sub_steps, enabled_tools)
             self.current_plan = plan
 
-            # 步骤3：执行计划
-            execution_result = self._execute_plan(plan)
+            # 步骤3：执行计划（支持重试）
+            execution_result = self._execute_plan_with_retry(plan)
 
             # 步骤4：整合结果
             final_result = self._integrate_results(plan)
 
             # 保存到历史记录
             self.execution_history.append(plan)
+
+            # 记录结果到会话历史
+            self.conversation.add_message("assistant", final_result, {
+                "type": "result",
+                "plan_id": plan.plan_id,
+                "success": True
+            })
 
             return {
                 "success": True,
@@ -743,6 +912,53 @@ class TaskAgent:
         plan.completed_at = datetime.now()
 
         return {"sub_task_results": results, "all_completed": all_completed}
+
+    def _execute_plan_with_retry(self, plan: TaskPlan) -> Dict[str, Any]:
+        """
+        带重试机制的执行计划
+
+        当任务执行失败时，自动重试最多 max_retries 次
+
+        Args:
+            plan: 执行计划对象
+
+        Returns:
+            执行结果汇总
+        """
+        last_result = None
+        retry_count = 0
+
+        while retry_count <= self.max_retries:
+            # 重置失败的子任务状态
+            if retry_count > 0:
+                logger.info(f"第 {retry_count} 次重试执行计划...")
+                for sub_task in plan.sub_tasks:
+                    if sub_task.status == TaskStatus.FAILED:
+                        sub_task.status = TaskStatus.PENDING
+                        sub_task.result = None
+
+            # 执行计划
+            last_result = self._execute_plan(plan)
+
+            # 如果全部完成，直接返回
+            if last_result.get("all_completed"):
+                if retry_count > 0:
+                    logger.info(f"重试成功，共重试 {retry_count} 次")
+                return last_result
+
+            # 检查是否还有可重试的失败任务
+            failed_tasks = [st for st in plan.sub_tasks if st.status == TaskStatus.FAILED]
+            if not failed_tasks:
+                break
+
+            retry_count += 1
+
+            # 达到最大重试次数
+            if retry_count > self.max_retries:
+                logger.warning(f"达到最大重试次数 {self.max_retries}，停止重试")
+                break
+
+        return last_result
 
     def _mock_execute(self, sub_task: SubTask) -> Dict[str, Any]:
         """
