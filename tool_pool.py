@@ -957,28 +957,31 @@ finally:
 
 
 # ============================================================
-# 文献查询工具
+# 文献查询工具（已升级为真实API服务）
 # ============================================================
 
 class PaperTool(BaseTool):
     """
-    文献查询工具类
+    文献查询工具类（V3.0 - 真实API版本）
 
     功能：
-    本地文献库关键词搜索（模拟实现，避免合规问题）
+    搜索学术文献，接入真实学术API：
+    - Semantic Scholar API（免费）
+    - arXiv API（免费）
+    - CrossRef API（免费）
 
-    注意：本工具为模拟接口，不实际连接知网等付费数据库
+    配置在 settings.yaml 中
     """
 
-    # 模拟文献数据库
+    # 本地模拟文献数据（作为备用）
     MOCK_PAPERS = [
         {
             "id": "P001",
             "title": "深度学习在自然语言处理中的应用综述",
             "authors": ["张三", "李四"],
             "year": 2023,
-            "journal": "计算机学报",
-            "keywords": ["深度学习", "自然语言处理", "神经网络", "NLP"],
+            "venue": "计算机学报",
+            "citations": 50,
             "abstract": "本文综述了深度学习技术在自然语言处理领域的最新进展..."
         },
         {
@@ -986,36 +989,9 @@ class PaperTool(BaseTool):
             "title": "基于机器学习的图像识别方法研究",
             "authors": ["王五", "赵六"],
             "year": 2023,
-            "journal": "软件学报",
-            "keywords": ["机器学习", "图像识别", "卷积神经网络", "CNN"],
+            "venue": "软件学报",
+            "citations": 30,
             "abstract": "本文提出了一种新的基于机器学习的图像识别方法..."
-        },
-        {
-            "id": "P003",
-            "title": "智能Agent系统设计与实现",
-            "authors": ["孙七", "周八"],
-            "year": 2022,
-            "journal": "人工智能学报",
-            "keywords": ["智能Agent", "多智能体", "决策系统"],
-            "abstract": "本文设计并实现了一个智能Agent系统..."
-        },
-        {
-            "id": "P004",
-            "title": "大数据分析技术在教育领域的应用",
-            "authors": ["吴九", "郑十"],
-            "year": 2023,
-            "journal": "教育技术研究",
-            "keywords": ["大数据", "教育", "数据分析", "学习分析"],
-            "abstract": "本文探讨了大数据分析技术在教育领域的应用前景..."
-        },
-        {
-            "id": "P005",
-            "title": "基于Python的数据可视化工具开发",
-            "authors": ["陈一", "林二"],
-            "year": 2022,
-            "journal": "计算机应用研究",
-            "keywords": ["Python", "数据可视化", "Matplotlib", "Pandas"],
-            "abstract": "本文介绍了使用Python开发数据可视化工具的方法..."
         }
     ]
 
@@ -1023,9 +999,20 @@ class PaperTool(BaseTool):
         """初始化文献查询工具"""
         super().__init__(
             name="paper_tool",
-            description="文献查询工具，支持本地文献库关键词搜索"
+            description="文献查询工具，支持在线学术文献搜索（Semantic Scholar/arXiv/CrossRef）"
         )
-        self.supported_actions = ["search", "get_detail", "list_all"]
+        self.supported_actions = ["search", "get_detail", "multi_search"]
+        self._paper_service = None
+
+    def _get_service(self):
+        """获取文献搜索服务实例（延迟加载）"""
+        if self._paper_service is None:
+            try:
+                from paper_search_service import get_paper_search_service
+                self._paper_service = get_paper_search_service()
+            except ImportError:
+                logger.warning("文献搜索服务模块未找到，使用本地模拟数据")
+        return self._paper_service
 
     def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1033,9 +1020,11 @@ class PaperTool(BaseTool):
 
         Args:
             params: 参数字典，包含:
-                - action: 操作类型 (search/get_detail/list_all)
+                - action: 操作类型 (search/get_detail/multi_search)
                 - query: 搜索关键词
                 - paper_id: 文献ID
+                - provider: 搜索提供商（semantic_scholar/arxiv/crossref）
+                - limit: 返回结果数量
 
         Returns:
             查询结果字典
@@ -1046,13 +1035,34 @@ class PaperTool(BaseTool):
         logger.info(f"PaperTool 执行操作: {action}, 查询: {query}")
 
         try:
+            service = self._get_service()
+
             if action == "search":
-                return self._search_papers(query)
+                limit = params.get("limit", 10)
+                provider = params.get("provider")
+
+                if service:
+                    return service.search(query, limit, provider)
+                else:
+                    return self._fallback_search(query)
+
             elif action == "get_detail":
                 paper_id = params.get("paper_id", "")
-                return self._get_paper_detail(paper_id)
-            elif action == "list_all":
-                return self._list_all_papers()
+                provider = params.get("provider")
+
+                if service:
+                    return service.get_paper_details(paper_id, provider)
+                else:
+                    return self._fallback_get_detail(paper_id)
+
+            elif action == "multi_search":
+                limit = params.get("limit", 5)
+
+                if service:
+                    return service.multi_search(query, limit)
+                else:
+                    return self._fallback_search(query)
+
             else:
                 return {
                     "success": False,
@@ -1068,16 +1078,8 @@ class PaperTool(BaseTool):
                 "data": None
             }
 
-    def _search_papers(self, query: str) -> Dict[str, Any]:
-        """
-        搜索文献
-
-        Args:
-            query: 搜索关键词
-
-        Returns:
-            搜索结果
-        """
+    def _fallback_search(self, query: str) -> Dict[str, Any]:
+        """回退的搜索方法（使用本地模拟数据）"""
         if not query.strip():
             return {
                 "success": False,
@@ -1085,72 +1087,31 @@ class PaperTool(BaseTool):
                 "data": None
             }
 
-        # 关键词匹配搜索
         query_lower = query.lower()
         matched_papers = []
 
         for paper in self.MOCK_PAPERS:
-            score = 0
-
-            # 标题匹配
-            if query_lower in paper["title"].lower():
-                score += 3
-
-            # 关键词匹配
-            for kw in paper["keywords"]:
-                if query_lower in kw.lower() or kw.lower() in query_lower:
-                    score += 2
-
-            # 摘要匹配
-            if query_lower in paper["abstract"].lower():
-                score += 1
-
-            if score > 0:
-                matched_papers.append({
-                    "paper": paper,
-                    "relevance_score": score
-                })
-
-        # 按相关度排序
-        matched_papers.sort(key=lambda x: x["relevance_score"], reverse=True)
-
-        results = [
-            {
-                "id": p["paper"]["id"],
-                "title": p["paper"]["title"],
-                "authors": p["paper"]["authors"],
-                "year": p["paper"]["year"],
-                "journal": p["paper"]["journal"],
-                "relevance": p["relevance_score"]
-            }
-            for p in matched_papers
-        ]
+            if query_lower in paper["title"].lower() or query_lower in paper.get("abstract", "").lower():
+                matched_papers.append(paper)
 
         return {
             "success": True,
-            "message": f"搜索 '{query}' 完成，找到 {len(results)} 篇相关文献",
+            "message": f"搜索 '{query}' 完成，找到 {len(matched_papers)} 篇文献（本地数据）",
             "data": {
                 "query": query,
-                "total": len(results),
-                "papers": results
+                "total": len(matched_papers),
+                "papers": matched_papers,
+                "provider": "local"
             }
         }
 
-    def _get_paper_detail(self, paper_id: str) -> Dict[str, Any]:
-        """
-        获取文献详情
-
-        Args:
-            paper_id: 文献ID
-
-        Returns:
-            文献详情
-        """
+    def _fallback_get_detail(self, paper_id: str) -> Dict[str, Any]:
+        """回退的获取详情方法"""
         for paper in self.MOCK_PAPERS:
             if paper["id"] == paper_id:
                 return {
                     "success": True,
-                    "message": f"获取文献 {paper_id} 详情成功",
+                    "message": f"获取文献详情成功（本地数据）",
                     "data": paper
                 }
 
@@ -1158,32 +1119,6 @@ class PaperTool(BaseTool):
             "success": False,
             "error": f"未找到文献: {paper_id}",
             "data": None
-        }
-
-    def _list_all_papers(self) -> Dict[str, Any]:
-        """
-        列出所有文献
-
-        Returns:
-            文献列表
-        """
-        papers = [
-            {
-                "id": p["id"],
-                "title": p["title"],
-                "authors": p["authors"],
-                "year": p["year"]
-            }
-            for p in self.MOCK_PAPERS
-        ]
-
-        return {
-            "success": True,
-            "message": f"文献库共有 {len(papers)} 篇文献",
-            "data": {
-                "total": len(papers),
-                "papers": papers
-            }
         }
 
 
@@ -1555,6 +1490,753 @@ class ScheduleTool(BaseTool):
 
 
 # ============================================================
+# 翻译工具（已升级为真实API服务）
+# ============================================================
+
+class TranslateTool(BaseTool):
+    """
+    翻译工具类（V3.0 - 真实API版本）
+
+    功能：
+    支持多语言文本翻译，接入真实翻译API：
+    - 百度翻译API
+    - 有道翻译API
+    - 大模型翻译（备选）
+
+    配置在 settings.yaml 中
+    """
+
+    SUPPORTED_LANGUAGES = ["zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it"]
+
+    def __init__(self):
+        """初始化翻译工具"""
+        super().__init__(
+            name="translate_tool",
+            description="翻译工具，支持多语言文本翻译（接入百度/有道翻译API）"
+        )
+        self.supported_actions = ["translate", "detect_language", "list_languages"]
+        self._translate_service = None
+
+    def _get_service(self):
+        """获取翻译服务实例（延迟加载）"""
+        if self._translate_service is None:
+            try:
+                from translate_service import get_translate_service
+                self._translate_service = get_translate_service()
+            except ImportError:
+                logger.warning("翻译服务模块未找到，使用基础翻译功能")
+        return self._translate_service
+
+    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行翻译操作
+
+        Args:
+            params: 参数字典，包含:
+                - action: 操作类型 (translate/detect_language/list_languages)
+                - text: 待翻译文本
+                - source_lang: 源语言 (auto/zh/en/...)
+                - target_lang: 目标语言 (zh/en/...)
+
+        Returns:
+            执行结果字典
+        """
+        action = params.get("action", "translate")
+        text = params.get("text", params.get("query", ""))
+
+        logger.info(f"TranslateTool 执行操作: {action}")
+
+        try:
+            service = self._get_service()
+
+            if action == "translate":
+                source_lang = params.get("source_lang", "auto")
+                target_lang = params.get("target_lang", "zh")
+
+                if service:
+                    return service.translate(text, source_lang, target_lang)
+                else:
+                    return self._fallback_translate(text, source_lang, target_lang)
+
+            elif action == "detect_language":
+                if service:
+                    return service.detect_language(text)
+                else:
+                    return self._fallback_detect_language(text)
+
+            elif action == "list_languages":
+                if service:
+                    return service.list_languages()
+                else:
+                    return self._list_languages()
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的操作类型: {action}",
+                    "data": None
+                }
+
+        except Exception as e:
+            logger.error(f"TranslateTool 执行出错: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "data": None
+            }
+
+    def _fallback_detect_language(self, text: str) -> Dict[str, Any]:
+        """回退的语言检测方法"""
+        if not text.strip():
+            return {"success": False, "error": "文本不能为空", "data": None}
+
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        english_chars = len(re.findall(r'[a-zA-Z]', text))
+        total = chinese_chars + english_chars + 1
+
+        if chinese_chars / total > 0.3:
+            detected, lang_name = "zh", "中文"
+        else:
+            detected, lang_name = "en", "英文"
+
+        return {
+            "success": True,
+            "message": f"检测到文本语言为: {lang_name}",
+            "data": {"language": detected, "language_name": lang_name, "confidence": 0.7}
+        }
+
+    def _fallback_translate(self, text: str, source_lang: str, target_lang: str) -> Dict[str, Any]:
+        """回退的翻译方法（当服务不可用时）"""
+        if not text.strip():
+            return {"success": False, "error": "翻译文本不能为空", "data": None}
+
+        return {
+            "success": False,
+            "error": "翻译服务未配置，请在settings.yaml中配置翻译API",
+            "data": None
+        }
+
+    def _list_languages(self) -> Dict[str, Any]:
+        """列出支持的语言"""
+        languages = {
+            "zh": "中文", "en": "英文", "ja": "日文", "ko": "韩文",
+            "fr": "法文", "de": "德文", "es": "西班牙文"
+        }
+        return {
+            "success": True,
+            "message": f"支持 {len(languages)} 种语言",
+            "data": {"languages": languages, "total": len(languages)}
+        }
+
+
+# ============================================================
+# 文本摘要工具（已升级为LLM服务）
+# ============================================================
+
+class SummaryTool(BaseTool):
+    """
+    文本摘要工具类（V3.0 - 支持LLM智能摘要）
+
+    功能：
+    1. 文本摘要生成（优先使用LLM，回退到规则方法）
+    2. 关键词提取
+    3. 文本统计分析
+
+    配置在 settings.yaml 中
+    """
+
+    # 停用词列表
+    STOP_WORDS = set([
+        "的", "了", "和", "是", "在", "我", "有", "这", "个", "们",
+        "中", "来", "上", "大", "为", "以", "不", "到", "说", "也",
+        "就", "要", "对", "与", "等", "被", "从", "而", "及", "其",
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "must", "shall",
+        "can", "need", "dare", "ought", "used", "to", "of", "in",
+        "for", "on", "with", "at", "by", "from", "as", "into", "through"
+    ])
+
+    def __init__(self):
+        """初始化文本摘要工具"""
+        super().__init__(
+            name="summary_tool",
+            description="文本摘要工具，支持智能摘要、关键词提取和统计分析（支持LLM增强）"
+        )
+        self.supported_actions = ["summarize", "extract_keywords", "analyze_text"]
+        self._llm_service = None
+
+    def _get_llm_service(self):
+        """获取LLM服务实例（延迟加载）"""
+        if self._llm_service is None:
+            try:
+                from llm_client import get_llm_service
+                self._llm_service = get_llm_service()
+            except ImportError:
+                logger.warning("LLM服务模块未找到，使用规则摘要方法")
+        return self._llm_service
+
+    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行文本摘要操作
+
+        Args:
+            params: 参数字典，包含:
+                - action: 操作类型 (summarize/extract_keywords/analyze_text)
+                - text: 待处理文本
+                - max_length: 摘要最大长度
+                - num_keywords: 关键词数量
+                - use_llm: 是否使用LLM（默认True）
+
+        Returns:
+            执行结果字典
+        """
+        action = params.get("action", "summarize")
+        text = params.get("text", params.get("content", ""))
+        use_llm = params.get("use_llm", True)
+
+        logger.info(f"SummaryTool 执行操作: {action}, use_llm={use_llm}")
+
+        try:
+            if action == "summarize":
+                max_length = params.get("max_length", 200)
+                return self._summarize(text, max_length, use_llm)
+            elif action == "extract_keywords":
+                num_keywords = params.get("num_keywords", 5)
+                return self._extract_keywords(text, num_keywords)
+            elif action == "analyze_text":
+                return self._analyze_text(text)
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的操作类型: {action}",
+                    "data": None
+                }
+
+        except Exception as e:
+            logger.error(f"SummaryTool 执行出错: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "data": None
+            }
+
+    def _summarize(self, text: str, max_length: int = 200, use_llm: bool = True) -> Dict[str, Any]:
+        """
+        生成文本摘要
+
+        优先使用LLM生成摘要，如果不可用则回退到规则方法
+
+        Args:
+            text: 原始文本
+            max_length: 摘要最大长度
+            use_llm: 是否使用LLM
+
+        Returns:
+            摘要结果
+        """
+        if not text.strip():
+            return {
+                "success": False,
+                "error": "文本不能为空",
+                "data": None
+            }
+
+        # 尝试使用LLM生成摘要
+        if use_llm:
+            llm_service = self._get_llm_service()
+            if llm_service and llm_service.is_available():
+                result = llm_service.summarize(text, max_length)
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "message": f"成功生成智能摘要，原文 {len(text)} 字",
+                        "data": {
+                            "summary": result.get("summary", ""),
+                            "original_length": len(text),
+                            "summary_length": len(result.get("summary", "")),
+                            "method": "llm"
+                        }
+                    }
+
+        # 回退到规则方法
+        return self._rule_based_summarize(text, max_length)
+
+    def _rule_based_summarize(self, text: str, max_length: int = 200) -> Dict[str, Any]:
+        """基于规则的摘要方法"""
+        # 分句
+        sentences = re.split(r'[。！？.!?]+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            return {
+                "success": False,
+                "error": "无法从文本中提取句子",
+                "data": None
+            }
+
+        # 计算句子重要性得分
+        scored_sentences = []
+        for i, sentence in enumerate(sentences):
+            score = self._calculate_sentence_score(sentence, i, len(sentences))
+            scored_sentences.append((sentence, score))
+
+        # 按得分排序并选择top句子
+        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+
+        # 构建摘要
+        summary = ""
+        selected_sentences = []
+        for sentence, score in scored_sentences:
+            if len(summary) + len(sentence) <= max_length:
+                selected_sentences.append(sentence)
+                summary = "。".join(selected_sentences) + "。"
+            else:
+                break
+
+        if not summary:
+            summary = sentences[0][:max_length] + "..."
+
+        return {
+            "success": True,
+            "message": f"成功生成摘要，原文 {len(text)} 字，摘要 {len(summary)} 字",
+            "data": {
+                "summary": summary,
+                "original_length": len(text),
+                "summary_length": len(summary),
+                "compression_ratio": round(len(summary) / len(text), 2),
+                "method": "rule"
+            }
+        }
+
+    def _calculate_sentence_score(self, sentence: str, position: int, total: int) -> float:
+        """
+        计算句子重要性得分
+
+        Args:
+            sentence: 句子文本
+            position: 句子位置
+            total: 总句子数
+
+        Returns:
+            重要性得分
+        """
+        score = 0.0
+
+        # 位置得分：首句和末句权重较高
+        if position == 0:
+            score += 2.0
+        elif position == total - 1:
+            score += 1.0
+        elif position < total * 0.3:
+            score += 0.5
+
+        # 长度得分：适中长度的句子更重要
+        length = len(sentence)
+        if 20 <= length <= 100:
+            score += 1.0
+        elif 10 <= length < 20 or 100 < length <= 150:
+            score += 0.5
+
+        # 关键词得分
+        important_words = ["研究", "发现", "结论", "结果", "表明", "证明",
+                          "重要", "关键", "主要", "核心", "首先", "总之"]
+        for word in important_words:
+            if word in sentence:
+                score += 0.5
+
+        return score
+
+    def _extract_keywords(self, text: str, num_keywords: int = 5) -> Dict[str, Any]:
+        """
+        提取关键词
+
+        使用词频统计和TF思想提取关键词
+
+        Args:
+            text: 原始文本
+            num_keywords: 关键词数量
+
+        Returns:
+            关键词列表
+        """
+        if not text.strip():
+            return {
+                "success": False,
+                "error": "文本不能为空",
+                "data": None
+            }
+
+        # 分词（简单实现：按空格和标点分割）
+        words = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+', text)
+
+        # 统计词频（排除停用词）
+        word_freq = {}
+        for word in words:
+            word_lower = word.lower()
+            if word_lower not in self.STOP_WORDS and len(word) > 1:
+                word_freq[word] = word_freq.get(word, 0) + 1
+
+        # 按频率排序
+        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        keywords = [{"word": w, "frequency": f} for w, f in sorted_words[:num_keywords]]
+
+        return {
+            "success": True,
+            "message": f"成功提取 {len(keywords)} 个关键词",
+            "data": {
+                "keywords": keywords,
+                "total_words": len(words),
+                "unique_words": len(word_freq)
+            }
+        }
+
+    def _analyze_text(self, text: str) -> Dict[str, Any]:
+        """
+        分析文本统计信息
+
+        Args:
+            text: 原始文本
+
+        Returns:
+            统计分析结果
+        """
+        if not text.strip():
+            return {
+                "success": False,
+                "error": "文本不能为空",
+                "data": None
+            }
+
+        # 统计信息
+        char_count = len(text)
+        char_count_no_space = len(text.replace(" ", "").replace("\n", ""))
+
+        # 分词统计
+        words = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+', text)
+        word_count = len(words)
+
+        # 句子统计
+        sentences = re.split(r'[。！？.!?]+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        sentence_count = len(sentences)
+
+        # 段落统计
+        paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+        paragraph_count = len(paragraphs)
+
+        # 平均句子长度
+        avg_sentence_length = char_count_no_space / sentence_count if sentence_count > 0 else 0
+
+        return {
+            "success": True,
+            "message": "文本分析完成",
+            "data": {
+                "character_count": char_count,
+                "character_count_no_space": char_count_no_space,
+                "word_count": word_count,
+                "sentence_count": sentence_count,
+                "paragraph_count": paragraph_count,
+                "average_sentence_length": round(avg_sentence_length, 1)
+            }
+        }
+
+
+# ============================================================
+# 知识问答工具（已升级为LLM服务）
+# ============================================================
+
+class QATool(BaseTool):
+    """
+    知识问答工具类（V3.0 - 支持LLM智能问答）
+
+    功能：
+    1. 通用知识问答（优先使用LLM，回退到本地知识库）
+    2. 学科知识查询
+    3. 常识问答
+
+    配置在 settings.yaml 中
+    """
+
+    # 本地知识库（作为备用）
+    KNOWLEDGE_BASE = {
+        "programming": {
+            "python": {
+                "definition": "Python是一种高级、解释型、通用型编程语言，以简洁清晰的语法著称。",
+                "creator": "Guido van Rossum",
+                "year": "1991",
+                "features": ["简洁易读", "动态类型", "自动内存管理", "丰富的标准库", "跨平台"],
+                "use_cases": ["Web开发", "数据分析", "人工智能", "自动化脚本", "科学计算"]
+            },
+            "java": {
+                "definition": "Java是一种广泛使用的面向对象编程语言，具有跨平台特性。",
+                "creator": "James Gosling",
+                "year": "1995",
+                "features": ["跨平台", "面向对象", "安全性高", "多线程", "健壮性"],
+                "use_cases": ["企业应用", "Android开发", "大数据", "Web服务", "分布式系统"]
+            }
+        },
+        "ai": {
+            "machine_learning": {
+                "definition": "机器学习是人工智能的一个分支，通过算法让计算机从数据中学习规律。",
+                "types": ["监督学习", "无监督学习", "强化学习", "半监督学习"],
+                "algorithms": ["线性回归", "决策树", "随机森林", "SVM", "神经网络", "K-means"]
+            },
+            "deep_learning": {
+                "definition": "深度学习是机器学习的子集，使用多层神经网络处理复杂模式。",
+                "frameworks": ["TensorFlow", "PyTorch", "Keras", "MXNet"],
+                "applications": ["图像识别", "语音识别", "自然语言处理", "推荐系统"]
+            }
+        }
+    }
+
+    def __init__(self):
+        """初始化知识问答工具"""
+        super().__init__(
+            name="qa_tool",
+            description="知识问答工具，支持智能问答（LLM增强）和知识库查询"
+        )
+        self.supported_actions = ["ask", "search", "list_topics"]
+        self._llm_service = None
+
+    def _get_llm_service(self):
+        """获取LLM服务实例（延迟加载）"""
+        if self._llm_service is None:
+            try:
+                from llm_client import get_llm_service
+                self._llm_service = get_llm_service()
+            except ImportError:
+                logger.warning("LLM服务模块未找到，使用本地知识库")
+        return self._llm_service
+
+    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行知识问答操作
+
+        Args:
+            params: 参数字典，包含:
+                - action: 操作类型 (ask/search/list_topics)
+                - question: 问题内容
+                - topic: 主题分类
+                - use_llm: 是否使用LLM（默认True）
+
+        Returns:
+            执行结果字典
+        """
+        action = params.get("action", "ask")
+        question = params.get("question", params.get("query", ""))
+        use_llm = params.get("use_llm", True)
+
+        logger.info(f"QATool 执行操作: {action}, use_llm={use_llm}")
+
+        try:
+            if action == "ask":
+                return self._answer_question(question, use_llm)
+            elif action == "search":
+                topic = params.get("topic", "")
+                return self._search_knowledge(question, topic)
+            elif action == "list_topics":
+                return self._list_topics()
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的操作类型: {action}",
+                    "data": None
+                }
+
+        except Exception as e:
+            logger.error(f"QATool 执行出错: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "data": None
+            }
+
+    def _answer_question(self, question: str, use_llm: bool = True) -> Dict[str, Any]:
+        """
+        回答问题
+
+        优先使用LLM生成回答，如果不可用则回退到本地知识库
+
+        Args:
+            question: 问题内容
+            use_llm: 是否使用LLM
+
+        Returns:
+            回答结果
+        """
+        if not question.strip():
+            return {
+                "success": False,
+                "error": "问题不能为空",
+                "data": None
+            }
+
+        # 尝试使用LLM回答
+        if use_llm:
+            llm_service = self._get_llm_service()
+            if llm_service and llm_service.is_available():
+                result = llm_service.answer_question(question)
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "message": "使用AI回答问题",
+                        "data": {
+                            "question": question,
+                            "answer": result.get("answer", ""),
+                            "source": "llm",
+                            "confidence": 0.85
+                        }
+                    }
+
+        # 回退到本地知识库
+        return self._local_answer(question)
+
+    def _local_answer(self, question: str) -> Dict[str, Any]:
+        """使用本地知识库回答问题"""
+        question_lower = question.lower()
+
+        # 在知识库中查找
+        answer = self._search_in_knowledge_base(question_lower)
+        if answer:
+            return {
+                "success": True,
+                "message": "从知识库中找到答案",
+                "data": {
+                    "question": question,
+                    "answer": answer["content"],
+                    "source": f"knowledge_base/{answer['source']}",
+                    "confidence": answer["confidence"]
+                }
+            }
+
+        # 无法回答
+        return {
+            "success": True,
+            "message": "未能找到确切答案",
+            "data": {
+                "question": question,
+                "answer": f"抱歉，当前没有找到关于「{question}」的答案。请配置LLM服务以获得更好的问答体验，或尝试更具体的问题。",
+                "source": "default",
+                "confidence": 0.1
+            }
+        }
+
+    def _search_in_knowledge_base(self, question: str) -> Optional[Dict[str, Any]]:
+        """
+        在知识库中搜索
+
+        Args:
+            question: 问题
+
+        Returns:
+            搜索结果
+        """
+        # 关键词匹配
+        keywords = {
+            "programming": ["python", "java", "javascript", "编程", "程序", "代码"],
+            "ai": ["机器学习", "深度学习", "人工智能", "ai", "ml", "nlp", "自然语言"],
+            "math": ["数学", "微积分", "线性代数", "统计", "矩阵", "向量"]
+        }
+
+        # 确定领域
+        matched_domain = None
+        for domain, kws in keywords.items():
+            for kw in kws:
+                if kw in question:
+                    matched_domain = domain
+                    break
+            if matched_domain:
+                break
+
+        if not matched_domain:
+            return None
+
+        # 在领域内搜索
+        domain_kb = self.KNOWLEDGE_BASE.get(matched_domain, {})
+        for topic, info in domain_kb.items():
+            topic_keywords = topic.replace("_", " ").split() + [topic]
+            for tk in topic_keywords:
+                if tk in question:
+                    # 构建回答
+                    answer_parts = []
+                    if "definition" in info:
+                        answer_parts.append(info["definition"])
+                    if "features" in info:
+                        answer_parts.append(f"主要特点：{', '.join(info['features'][:3])}")
+                    if "use_cases" in info:
+                        answer_parts.append(f"应用场景：{', '.join(info['use_cases'][:3])}")
+                    if "concepts" in info:
+                        answer_parts.append(f"核心概念：{', '.join(info['concepts'][:4])}")
+
+                    if answer_parts:
+                        return {
+                            "content": " ".join(answer_parts),
+                            "source": f"{matched_domain}/{topic}",
+                            "confidence": 0.75
+                        }
+
+        return None
+
+    def _search_knowledge(self, query: str, topic: str = "") -> Dict[str, Any]:
+        """
+        搜索知识库
+
+        Args:
+            query: 搜索查询
+            topic: 主题限定
+
+        Returns:
+            搜索结果
+        """
+        results = []
+
+        search_domains = [topic] if topic and topic in self.KNOWLEDGE_BASE else self.KNOWLEDGE_BASE.keys()
+
+        for domain in search_domains:
+            domain_kb = self.KNOWLEDGE_BASE.get(domain, {})
+            for topic_name, info in domain_kb.items():
+                # 检查是否匹配
+                topic_text = f"{topic_name} {info.get('definition', '')}"
+                if query.lower() in topic_text.lower():
+                    results.append({
+                        "domain": domain,
+                        "topic": topic_name,
+                        "definition": info.get("definition", ""),
+                        "relevance": 0.8
+                    })
+
+        return {
+            "success": True,
+            "message": f"搜索 '{query}' 找到 {len(results)} 条结果",
+            "data": {
+                "query": query,
+                "total": len(results),
+                "results": results
+            }
+        }
+
+    def _list_topics(self) -> Dict[str, Any]:
+        """
+        列出所有知识主题
+
+        Returns:
+            主题列表
+        """
+        topics = {}
+        for domain, domain_kb in self.KNOWLEDGE_BASE.items():
+            topics[domain] = list(domain_kb.keys())
+
+        return {
+            "success": True,
+            "message": "知识库主题列表",
+            "data": {
+                "topics": topics,
+                "domains": list(self.KNOWLEDGE_BASE.keys())
+            }
+        }
+
+
+# ============================================================
 # 工具管理器
 # ============================================================
 
@@ -1587,12 +2269,16 @@ class ToolManager:
         Args:
             db_path: 日程数据库路径
         """
-        # 注册所有工具
+        # 注册所有工具（原有5个 + 新增3个）
         self.register_tool(FileTool())
         self.register_tool(DataTool())
         self.register_tool(CodeTool())
         self.register_tool(PaperTool())
         self.register_tool(ScheduleTool(db_path))
+        # 新增工具
+        self.register_tool(TranslateTool())
+        self.register_tool(SummaryTool())
+        self.register_tool(QATool())
 
         # 默认启用所有工具
         self.enabled_tools = list(self.tools.keys())

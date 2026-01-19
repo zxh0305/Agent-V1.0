@@ -1,0 +1,138 @@
+# ============================================================
+# 智能任务处理 Agent 平台 V3.0 配置文件
+# ============================================================
+# 说明：本文件包含所有API密钥和服务配置
+# 注意：请勿将此文件提交到公开仓库！
+# ============================================================
+
+# ==================== 大模型配置 ====================
+llm:
+  # 选择使用的大模型提供商: openai / qwen / ollama / zhipu
+  provider: "qwen"
+
+  # OpenAI 配置
+  openai:
+    api_key: "sk-your-openai-api-key"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-3.5-turbo"
+    temperature: 0.7
+    max_tokens: 2000
+
+  # 通义千问配置 (阿里云)
+  qwen:
+    api_key: "sk-your-qwen-api-key"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen-turbo"
+    temperature: 0.7
+    max_tokens: 2000
+
+  # Ollama 本地模型配置
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "qwen2:7b"
+    temperature: 0.7
+
+  # 智谱AI配置
+  zhipu:
+    api_key: "your-zhipu-api-key"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    model: "glm-4-flash"
+    temperature: 0.7
+
+# ==================== 翻译服务配置 ====================
+translate:
+  # 选择翻译服务提供商: baidu / youdao / google / llm
+  provider: "baidu"
+
+  # 百度翻译API
+  baidu:
+    app_id: "your-baidu-app-id"
+    secret_key: "your-baidu-secret-key"
+    api_url: "https://fanyi-api.baidu.com/api/trans/vip/translate"
+
+  # 有道翻译API
+  youdao:
+    app_key: "your-youdao-app-key"
+    app_secret: "your-youdao-app-secret"
+    api_url: "https://openapi.youdao.com/api"
+
+  # Google翻译 (需要代理)
+  google:
+    api_key: "your-google-api-key"
+    api_url: "https://translation.googleapis.com/language/translate/v2"
+
+  # 使用大模型进行翻译
+  llm:
+    enabled: true
+
+# ==================== 文献搜索配置 ====================
+paper_search:
+  # 选择文献搜索服务: semantic_scholar / arxiv / crossref
+  provider: "semantic_scholar"
+
+  # Semantic Scholar API (免费，无需API Key)
+  semantic_scholar:
+    api_url: "https://api.semanticscholar.org/graph/v1"
+    # 可选：申请API Key可以提高请求限制
+    api_key: ""
+
+  # arXiv API (免费，无需API Key)
+  arxiv:
+    api_url: "http://export.arxiv.org/api/query"
+
+  # CrossRef API (免费)
+  crossref:
+    api_url: "https://api.crossref.org/works"
+    email: "your-email@example.com"
+
+# ==================== 代码执行配置 ====================
+code_execution:
+  timeout: 30
+  max_output_length: 10000
+  allowed_modules:
+    - math
+    - random
+    - statistics
+    - datetime
+    - json
+    - collections
+    - itertools
+    - functools
+    - re
+    - string
+    - numpy
+    - pandas
+
+# ==================== 文件处理配置 ====================
+file_processing:
+  upload_dir: "uploads"
+  export_dir: "exports"
+  max_file_size_mb: 50
+  allowed_extensions:
+    - pdf
+    - xlsx
+    - xls
+    - csv
+    - docx
+    - doc
+    - txt
+
+# ==================== 日程管理配置 ====================
+schedule:
+  database_path: "data/schedules.db"
+  reminder_enabled: false
+
+# ==================== 界面配置 ====================
+ui:
+  page_title: "智能Agent平台 V3.0"
+  page_icon: "🤖"
+  theme: "light"
+  show_debug_info: false
+  max_history_display: 20
+
+# ==================== 系统配置 ====================
+system:
+  log_level: "INFO"
+  log_dir: "logs"
+  enable_cache: true
+  cache_ttl_seconds: 3600
